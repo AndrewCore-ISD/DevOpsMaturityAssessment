@@ -24,6 +24,136 @@ Class Survey
 		$this->SaveResponses();
 	}
 	
+	function GUIDv4 ($trim = true)
+	{
+		// Windows
+		if (function_exists('com_create_guid') === true) {
+			if ($trim === true)
+				return trim(com_create_guid(), '{}');
+			else
+				return com_create_guid();
+		}
+
+		// OSX/Linux
+		if (function_exists('openssl_random_pseudo_bytes') === true) {
+			$data = openssl_random_pseudo_bytes(16);
+			$data[6] = chr(ord($data[6]) & 0x0f | 0x40);    // set version to 0100
+			$data[8] = chr(ord($data[8]) & 0x3f | 0x80);    // set bits 6-7 to 10
+			return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+		}
+
+		// Fallback (PHP 4.2+)
+		mt_srand((double)microtime() * 10000);
+		$charid = strtolower(md5(uniqid(rand(), true)));
+		$hyphen = chr(45);                  // "-"
+		$lbrace = $trim ? "" : chr(123);    // "{"
+		$rbrace = $trim ? "" : chr(125);    // "}"
+		$guidv4 = $lbrace.
+				substr($charid,  0,  8).$hyphen.
+				substr($charid,  8,  4).$hyphen.
+				substr($charid, 12,  4).$hyphen.
+				substr($charid, 16,  4).$hyphen.
+				substr($charid, 20, 12).
+				$rbrace;
+		return $guidv4;
+	}
+
+	public function SaveResults()
+	{
+		$servername = "localhost";
+		$username = "writer";
+		$password = "Password123";
+		$dbName = "devops";
+
+		$conn = new mysqli($servername, $username, $password, $dbName);
+
+		if($conn->connect_error) {
+			die("Connection failed: " . $conn->connect_error);
+		}
+		$guid = $this->GUIDv4 ();
+
+		$surveyId = -1;
+
+		$sql = "INSERT INTO `survey` (`SubmitDate`, `guid`) VALUES (NOW(), '" . $guid ."' )";
+		if($conn->query($sql) == TRUE)
+		{
+			$sql = "SELECT * FROM survey WHERE guid = '" . $guid . "'";
+			$result = $conn->query($sql);
+			$surveyId = mysqli_fetch_assoc($result)['SurveyId'];
+		}
+		//save raw version for comparison
+		$sql = "INSERT INTO `surveyraw`( `SurveyId`, `Raw`) VALUES (" . $surveyId . ", '" . mysqli_real_escape_string($conn, json_encode($this->sections)) . "');";
+		$result = $conn->query($sql);
+
+		//save to surveyanswers
+		foreach ($this->sections as $section)
+		{
+			//get the sectionId
+			$sectionName = $section['SectionName'];
+			$sectionId = -1;
+			$sql = "SELECT * FROM section WHERE Title = '" . $sectionName . "';";
+			echo $sql;
+			$result = $conn->query($sql);
+			if (mysqli_num_rows($result) != 0)
+			{
+				$sectionId = mysqli_fetch_assoc($result)['SectionId'];
+			}
+			//if section doesn't exist, skip
+			if ($sectionId == -1)
+			{
+				continue;
+			}
+
+			foreach ($section['Questions'] as $question)
+			{
+				//skip any non-question section
+				if($question['Type'] == 'Banner')
+				{
+					continue;
+				}
+				else 
+				{
+					$questionText = $question['QuestionText'];
+					$questionId = -1;
+					$sql = "SELECT * FROM question WHERE Text = '" . mysqli_real_escape_string($conn, $questionText) . "' && SectionId = " . $sectionId . ";";
+					$result = $conn->query($sql);
+					if (mysqli_num_rows($result) != 0)
+					{
+						$questionId = mysqli_fetch_assoc($result)['QuestionId'];
+					}
+					if($questionId == -1)
+					{
+						continue;
+					}
+					//look through all the answers
+					foreach($question['Answers'] as $answer)
+					{
+						if($answer['Value'] == "checked")
+						{
+							$answerText = $answer['Answer'];
+							$answerId = -1;
+							$sql = "SELECT * FROM questionanswer WHERE Text = '" . $answerText . "' && Questionid = " . $questionId . ";";
+							$result = $conn->query($sql);
+							if (mysqli_num_rows($result) != 0)
+							{
+								$answerId = mysqli_fetch_assoc($result)['QuestionAnswerId'];
+							}
+							if($answerId == -1)
+							{
+								continue;
+							}
+							//If found, insert to surveyanswer
+							$sql = "INSERT INTO `surveyanswer`(`SurveyId`, `QuestionId`, `AnswerId`) VALUES (" . $surveyId . ", " . $questionId . ", " . $answerId . ");";
+							$conn->query($sql);
+						}
+					}
+				}
+			}
+		}
+
+		$conn->close(); 
+	}
+
 	public function GenerateResultsSummary()
 	{
 		foreach ($this->sections as $section)

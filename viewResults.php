@@ -22,6 +22,7 @@
 	if ( $sectionURL == '' )
 	{
 		$resultsSummary = $survey->GenerateResultsSummary();
+		$survey->SaveResults();
 		// Sort into the order they should be displayed on the spider diagram
 		uasort( $resultsSummary, function($a, $b) { return $a['SpiderPos'] - $b['SpiderPos']; } );	
 		$chartTitle = 'DevOps Maturity by Area';
